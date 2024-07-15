@@ -1,3 +1,1 @@
-# Create Sticker to WhatsApp
-
-This bot intended to convert discord sticker to given whatsapp number
+** WHATSAPP API by SHADALKANE **

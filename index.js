@@ -1,54 +1,68 @@
-require('dotenv').config();
+const {DisconnectReason, useMultiFileAuthState} = require("@whiskeysockets/baileys");
+const makeWASocket = require("@whiskeysockets/baileys").default;
+const fs = require('fs');
+const express = require("express");
+const bodyParser = require("body-parser");
 
-const token = process.env.DISCORD_TOKEN;
+var sock;
 
-const fs = require('node:fs');
-const path = require('node:path');
-const { Client, Collection, GatewayIntentBits } = require('discord.js');
-// const { token } = require('./config.json');
+async function connectionLogic(){
+    const {state, saveCreds} = await useMultiFileAuthState("auth_info_baileys");
+    sock = makeWASocket({
+        printQRInTerminal: true,
+        auth: state,
+    });
 
-const client = new Client({ intents: [
-	GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildBans,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-]});
+    sock.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect, qr} = update || {};
 
-client.commands = new Collection();
-const foldersPath = path.join(__dirname, 'commands');
-const commandFolders = fs.readdirSync(foldersPath);
+        if (qr){
+            console.log(qr);
+        }
 
-for (const folder of commandFolders) {
-	const commandsPath = path.join(foldersPath, folder);
-	const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
-	for (const file of commandFiles) {
-		const filePath = path.join(commandsPath, file);
-		const command = require(filePath);
-		if ('data' in command && 'execute' in command) {
-			client.commands.set(command.data.name, command);
-		} else {
-			console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
-		}
-	}
+        if (connection === "close"){
+            const shouldReconnect = 
+                lastDisconnect?.error?.output?.statusCode !== 
+            DisconnectReason.loggedOut;
+
+            if (shouldReconnect) {
+                connectionLogic();
+            }
+        }
+    })
+
+    sock.ev.on("creds.update", saveCreds);
 }
 
-const eventsPath = path.join(__dirname, 'events');
-const eventFiles = fs.readdirSync(eventsPath).filter(file => file.endsWith('.js'));
+connectionLogic();
 
-for (const file of eventFiles) {
-	const filePath = path.join(eventsPath, file);
-	const event = require(filePath);
-	console.log(`[EVENT] ${event.name}.`);
-	if (event.once) {
-		client.once(event.name, (...args) => event.execute(...args));
-	} else {
-		client.on(event.name, (...args) => event.execute(...args));
-	}
+
+const app = express();
+const port = 3000;
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true}));
+
+app.listen(
+    port, () => {
+        console.log(`Service is running on port ${port}`);
+    }
+);
+
+const sendMessage = async (req, res) => {
+    try {
+        let send_message = await sock.sendMessage(req.body.phone + '@c.us', {
+            text: req.body.message
+        })
+        res.status(200).json({
+            'status' : 'ok',
+            'message_id' : send_message.key.id
+        })
+    } catch(err) {
+        res.status(400).json({
+            'status' : 'ERROR',
+            'messages' : err.message
+        })
+    }
 }
 
-client.login(token);
-
-client.on('error', (err) => {
-   console.log(err.message)
-});
+app.post('/send/message', sendMessage);
